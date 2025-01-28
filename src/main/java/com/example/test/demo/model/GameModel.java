@@ -5,8 +5,8 @@ import lombok.Data;
 
 import java.util.UUID;
 
-@Builder
 @Data
+@Builder
 public class GameModel {
 
     private UUID gameId;
@@ -20,6 +20,8 @@ public class GameModel {
     private boolean completed;
 
     private boolean notFirstTurn;
+
+    private boolean[][] openMap;
 
     private int[][] field;
 

@@ -10,5 +10,5 @@ public interface GameService {
 
     GameResponse newGame(NewGameRequest newGameRequest);
 
-    int[][] turn(UUID gameCode, TurnRequest turnRequest);
+    GameResponse turn(TurnRequest turnRequest);
 }
