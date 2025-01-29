@@ -1,5 +1,6 @@
 package com.example.test.demo.model.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
 
@@ -9,6 +10,7 @@ import java.util.UUID;
 @Builder
 public class TurnRequest {
 
+    @JsonProperty("game_id")
     private UUID gameId;
 
     private int col;

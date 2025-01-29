@@ -3,3 +3,6 @@ server:
 spring:
   application:
     name: sap
+#logging:
+#  level:
+#    root: debug

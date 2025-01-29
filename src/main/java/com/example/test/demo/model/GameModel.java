@@ -21,8 +21,8 @@ public class GameModel {
 
     private boolean notFirstTurn;
 
-    private boolean[][] openMap;
+    private String[][] openedField;
 
-    private int[][] field;
+    private String[][] field;
 
 }

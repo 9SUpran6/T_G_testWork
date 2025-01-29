@@ -3,31 +3,32 @@ package com.example.test.demo.service;
 import com.example.test.demo.model.dto.request.NewGameRequest;
 import com.example.test.demo.model.dto.request.TurnRequest;
 import com.example.test.demo.model.dto.response.GameResponse;
-import lombok.RequiredArgsConstructor;
 import com.example.test.demo.model.GameModel;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import com.example.test.demo.service.interfaces.GameService;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Arrays;
-import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.IntStream;
+
+import static com.example.test.demo.service.CacheServiceImpl.LOCAL_CACHE;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class GameServiceImpl implements GameService {
-
-
-    private static final Map<UUID, GameModel> LOCAL_CACHE = new ConcurrentHashMap<>();
 
     @Override
     public GameResponse newGame(NewGameRequest gameRequest) {
-        int[][] field = new int[gameRequest.getWidth()][gameRequest.getHeight()];
-        boolean[][] openMap = new boolean[gameRequest.getWidth()][gameRequest.getHeight()];
+        log.info("Start new game");
+        if (gameRequest.getMinesCount() >= (gameRequest.getWidth() * gameRequest.getHeight())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Количество мин должно быть меньше длина*высота -1");
+        }
+        String[][] field = new String[gameRequest.getHeight()][gameRequest.getWidth()];
+        String[][] openMap = new String[gameRequest.getHeight()][gameRequest.getWidth()];
         UUID gameCode = UUID.randomUUID();
 
         GameModel currentGame = GameModel.builder()
@@ -37,19 +38,18 @@ public class GameServiceImpl implements GameService {
                 .height(gameRequest.getHeight())
                 .minesCount(gameRequest.getMinesCount())
                 .field(field)
-                .openMap(openMap)
+                .openedField(openMap)
                 .notFirstTurn(false)
                 .build();
 
         LOCAL_CACHE.put(gameCode, currentGame);
-
+        log.info("new game with gameId {} created", gameCode);
         return GameResponse.builder()
                 .gameId(gameCode)
-                .completed(false)
                 .width(gameRequest.getWidth())
                 .height(gameRequest.getHeight())
                 .minesCount(gameRequest.getMinesCount())
-                .notFirstTurn(false)
+                .completed(false)
                 .field(field)
                 .build();
     }
@@ -57,67 +57,101 @@ public class GameServiceImpl implements GameService {
 
     @Override
     public GameResponse turn(TurnRequest turnRequest) {
-        log.info("Start turn with game number: {}", turnRequest.getGameId());
+        log.info("Start turn with gameId: {}", turnRequest.getGameId());
         GameModel currentGame = LOCAL_CACHE.get(turnRequest.getGameId());
+
+        if (currentGame.isCompleted()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Игра уже завершена, ход невозможен");
+        }
+
         if (!currentGame.isNotFirstTurn()) {
-            log.info("Turn is already first turn with game number: {}", turnRequest.getGameId());
+            log.info("Turn is already first turn with gameId: {}", turnRequest.getGameId());
             currentGame.setField(setLevel(currentGame, turnRequest));
             currentGame.setNotFirstTurn(true);
         }
-        if(!openCell(currentGame.getField(), currentGame.getOpenMap(),turnRequest.getCol(),turnRequest.getRow())){
+
+        if (minesTouch(currentGame.getField(), turnRequest)) {
+            log.info("Mine is touched");
             return GameResponse.builder()
                     .gameId(currentGame.getGameId())
+                    .width(currentGame.getWidth())
+                    .height(currentGame.getHeight())
+                    .minesCount(currentGame.getMinesCount())
                     .completed(true)
                     .field(currentGame.getField())
                     .build();
-        };
-        currentGame.setCompleted(finishGame(currentGame));
-        log.info("Finished turn with game number: {}", turnRequest.getGameId());
+        }
+
+        currentGame.setOpenedField(openCell(currentGame.getField(),currentGame.getOpenedField(), turnRequest.getCol(), turnRequest.getRow()));
+
+        if (finishGame(currentGame)) {
+            currentGame.setCompleted(true);
+            currentGame.setOpenedField(finishField(currentGame.getField()));
+        }
+
+        log.info("Finished turn with gameId: {}", turnRequest.getGameId());
         return GameResponse.builder()
                 .gameId(currentGame.getGameId())
+                .width(currentGame.getWidth())
+                .height(currentGame.getHeight())
+                .minesCount(currentGame.getMinesCount())
                 .completed(currentGame.isCompleted())
-                .field(currentGame.getField())
+                .field(currentGame.getOpenedField())
                 .build();
     }
 
-    private int[][] setLevel(GameModel currentGame, TurnRequest turnRequest) {
-        log.info("Start setting level with game number: {}", turnRequest.getGameId());
+    private String[][] setLevel(GameModel currentGame, TurnRequest turnRequest) {
+        log.info("Start setting level with gameId: {}", turnRequest.getGameId());
         Random random = new Random();
         int width = currentGame.getWidth();
         int height = currentGame.getHeight();
         int minesCount = currentGame.getMinesCount();
-        int col = turnRequest.getCol();
         int row = turnRequest.getRow();
-        int[][] field = currentGame.getField();
-        field[col][row] = -2;
+        int col = turnRequest.getCol();
+        String[][] field = currentGame.getField();
+        field[row][col] = "S";
         while (minesCount != 0) {
-            int x = random.nextInt(width);
-            int y = random.nextInt(height);
-            if (field[x][y] != -1 && field[x][y] != -2) {
-                field[x][y] = -1;
+            int x = random.nextInt(height);
+            int y = random.nextInt(width);
+            if (!"X".equals(field[x][y]) && !"S".equals(field[x][y])) {
+                field[x][y] = "X";
                 minesCount--;
             }
         }
-        field[col][row] = 0;
-        log.info("All mines are set on level with game number: {}", turnRequest.getGameId());
+        field[row][col] = null;
+        log.info("All mines are set on level with gameId: {}", turnRequest.getGameId());
         return calculateCells(field, width, height);
     }
 
-    private int[][] calculateCells(int[][] field, int width, int height) {
-        log.info("Start calculating cells with game number");
-        int[] xAxis = {1, 1, 1, 0, -1, -1, -1, 0};//Здесь указаны локальные смещения по осям относительно текущей клетки.
-        int[] yAxis = {1, 0, -1, -1, -1, 0, 1, 1};//Координаты текущей клетки (0,0), справа по диагонали от нее (1,1) и т.д.
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                if (field[x][y] != -1) continue;
-                for (int i = 0; i < 8; i++) {//Обходим все 8 соседей от клетки
-                    int currentX = x + xAxis[i];
-                    int currentY = y + yAxis[i];
-                    if (currentX >= 0 && currentX < width && currentY >= 0 && currentY < height) {
-                        if (field[currentX][currentY] != -1) {
-                            field[currentX][currentY]++;
+    private String[][] calculateCells(String[][] field, int width, int height) {
+        log.info("Start calculating cells");
+        int[] yAxis = {1, 0, -1, -1, -1, 0, 1, 1};//Здесь указаны локальные смещения по осям относительно текущей клетки.
+        int[] xAxis = {1, 1, 1, 0, -1, -1, -1, 0};//Координаты текущей клетки (0,0), справа по диагонали от нее (1,1) и т.д.
+        int currentRow, currentCol;
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < width; col++) {
+                if ("X".equals(field[row][col])) {
+                    for (int i = 0; i < 8; i++) {//Обходим все 8 соседей от клетки
+                        currentRow = row + yAxis[i];
+                        currentCol = col + xAxis[i];
+                        if (currentRow >= 0 && currentRow < height &&
+                            currentCol >= 0 && currentCol < width &&
+                            !"X".equals(field[currentRow][currentCol])) {
+
+                            if (field[currentRow][currentCol] == null) {
+                                field[currentRow][currentCol] = "1";
+                            } else {
+                                field[currentRow][currentCol] = String.valueOf(Integer.parseInt(field[currentRow][currentCol]) + 1);
+                            }
                         }
                     }
+                }
+            }
+        }
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < width; col++) {
+                if (field[row][col] == null) {
+                    field[row][col] = "0";
                 }
             }
         }
@@ -125,33 +159,49 @@ public class GameServiceImpl implements GameService {
         return field;
     }
 
-    private boolean openCell(int[][] field, boolean[][] openMap, int col, int row) {
-        log.info("Start opening cells");
-        if (openMap[col][row]) return true;
-        if (field[col][row] == -1) {
-            log.info("Mine is touched");
-            return false;
-        }
-        openMap[col][row] = true;
-        if (field[col][row] == 0) {
-            int[] xAxis = {1, 1, 1, 0, -1, -1, -1, 0};
+    private String[][] openCell(String[][] field, String[][] openedField, int col, int row) {
+        if (openedField[row][col] != null)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Эта ячейка уже открыта");
+
+        openedField[row][col] = field[row][col];
+
+        if ("0".equals(field[row][col])) {
             int[] yAxis = {1, 0, -1, -1, -1, 0, 1, 1};
-            for(int i = 0; i < 8; i++){
-                openCell(field, openMap, col+xAxis[i], row+yAxis[i]);
+            int[] xAxis = {1, 1, 1, 0, -1, -1, -1, 0};
+            int newCol, newRow;
+            for (int i = 0; i < 8; i++) {
+                newCol = col + xAxis[i];
+                newRow = row + yAxis[i];
+                if (newCol >= 0 && newCol < field[0].length && newRow >= 0 && newRow < field.length) {
+                    if (openedField[newRow][newCol] == null) {
+                        openCell(field, openedField, newCol, newRow);
+                    }
+                }
             }
         }
-        return true;
+        return openedField;
     }
 
-    private boolean finishGame(GameModel currentGame){
+    private boolean minesTouch(String[][] field, TurnRequest turnRequest){
+        return "X".equals(field[turnRequest.getRow()][turnRequest.getCol()]);
+    }
+
+    private boolean finishGame(GameModel currentGame) {
         log.info("Start finishing game");
-        boolean[][] openMap = currentGame.getOpenMap();
-        int[][] field = currentGame.getField();
-        int minesCount = currentGame.getMinesCount();
-        int openedCells = Arrays.stream(openMap)
-                .flatMapToInt(row -> IntStream.range(0, row.length).map(i -> row[i] ? 1 : 0))
-                .sum();
-        return openedCells == (field.length *field[0].length -minesCount);
+        String[][] openMap = currentGame.getOpenedField();
+        long notOpenCells = Arrays.stream(openMap)
+                .flatMap(Arrays::stream)
+                .filter(Objects::isNull)
+                .count();
+        return notOpenCells == currentGame.getMinesCount();
+    }
+
+    private String[][] finishField(String[][] field) {
+        return Arrays.stream(field)
+                .map(row -> Arrays.stream(row)
+                        .map(x -> "X".equals(x) ? "M" : x)
+                        .toArray(String[]::new))
+                .toArray(String[][]::new);
     }
 
 }
